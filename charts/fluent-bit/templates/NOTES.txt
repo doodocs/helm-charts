@@ -1,0 +1,29 @@
+Fluent Bit has been deployed successfully!
+
+Namespace: {{ .Release.Namespace }}
+Release: {{ .Release.Name }}
+
+To check the status of the DaemonSet:
+  kubectl get daemonset {{ include "fluent-bit.fullname" . }} -n {{ .Release.Namespace }}
+
+To view logs:
+  kubectl logs -l app=fluent-bit -n {{ .Release.Namespace }} -f
+
+{{- if not .Values.yandexCloud.existingSecret }}
+{{- if not .Values.yandexCloud.iamKeyJson }}
+
+WARNING: No Yandex Cloud IAM key configured!
+You need to create a secret with the IAM key:
+
+  kubectl create secret generic {{ include "fluent-bit.secretName" . }} \
+    --from-file=key.json=/path/to/your/key.json \
+    -n {{ .Release.Namespace }}
+
+Or set yandexCloud.existingSecret to use an existing secret.
+{{- end }}
+{{- end }}
+
+Logs are being sent to:
+  - System logs: {{ .Values.yandexCloud.systemLogGroupId }}
+  - App logs: {{ .Values.yandexCloud.appsLogGroupId }}
+  - Endpoint: {{ .Values.yandexCloud.endpoint }}

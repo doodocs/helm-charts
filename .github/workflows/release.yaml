@@ -1,0 +1,100 @@
+name: Release Charts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install chart-testing (ct)
+        uses: helm/chart-testing-action@v2.8.0
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Downcase OCI Repo
+        run: |
+          echo "OCI_REPO=$(echo "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: List Changed Charts
+        id: changed
+        run: |
+          before="${{ github.event.before }}"
+
+          # Check if before commit exists (first commit)
+          if [ "$before" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$before" 2>/dev/null; then
+            echo "First commit or force push - releasing all charts"
+            changed=$(find charts -mindepth 1 -maxdepth 1 -type d | sort)
+          else
+            changed=$(ct list-changed --since "$before" --chart-dirs charts) || true
+          fi
+
+          if [ -z "$changed" ]; then
+            echo "No charts changed"
+            echo "charts=" >> $GITHUB_OUTPUT
+          else
+            echo "Changed charts:"
+            echo "$changed"
+            echo "charts<<EOF" >> $GITHUB_OUTPUT
+            echo "$changed" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Lint Changed Charts
+        if: steps.changed.outputs.charts != ''
+        run: |
+          for chart in ${{ steps.changed.outputs.charts }}; do
+            echo "Linting $chart..."
+            helm lint "$chart"
+          done
+
+      - name: Package and Push Changed Charts
+        if: steps.changed.outputs.charts != ''
+        run: |
+          changed_charts="${{ steps.changed.outputs.charts }}"
+
+          for chart in $changed_charts; do
+            if [ ! -d "$chart" ]; then
+              echo "Chart $chart was deleted, skipping"
+              continue
+            fi
+
+            echo "Processing $chart..."
+
+            # Update Dependencies
+            helm dependency update "$chart"
+
+            # Package
+            chart_name=$(basename "$chart")
+            chart_version=$(grep '^version:' "$chart/Chart.yaml" | awk '{print $2}')
+            echo "Packaging $chart_name version $chart_version"
+            helm package "$chart" -d .packaged
+
+            # Push
+            helm push .packaged/${chart_name}-${chart_version}.tgz ${{ env.OCI_REPO }}
+          done

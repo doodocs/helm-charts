@@ -1,0 +1,101 @@
+# Fluent Bit Helm Chart Values
+
+# Image configuration
+image:
+  repository: cr.yandex/yc/fluent-bit-plugin-yandex
+  tag: v1.0.3-fluent-bit-1.8.6
+  pullPolicy: IfNotPresent
+
+# Service account
+serviceAccount:
+  create: true
+  name: fluent-bit
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Resource limits
+resources:
+  limits:
+    memory: 128Mi
+    cpu: 100m
+  requests:
+    memory: 64Mi
+    cpu: 50m
+
+# Tolerations for scheduling on master/control-plane nodes
+tolerations:
+  - key: node-role.kubernetes.io/master
+    effect: NoSchedule
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+
+# Node selector (optional)
+nodeSelector: {}
+
+# Affinity rules (optional)
+affinity: {}
+
+# Yandex Cloud Logging configuration
+yandexCloud:
+  # Endpoint for Yandex Cloud Logging API
+  endpoint: api.yandexcloud.kz:443
+
+  # Log group IDs (required)
+  systemLogGroupId: ""
+  appsLogGroupId: ""
+
+  # Resource identification for system logs
+  systemResourceType: k3s-system
+  systemResourceId: "${NODE_NAME}"
+
+  # Resource identification for app logs
+  appsResourceType: k3s-apps
+  appsResourceId: "${NODE_NAME}"
+
+  # Secret containing the IAM key
+  # The secret should have a key named "key.json"
+  existingSecret: ""
+  # If existingSecret is empty, create secret from this value (base64 encoded)
+  iamKeyJson: ""
+
+# Fluent Bit configuration
+config:
+  # Flush interval in seconds
+  flush: 5
+  # Log level: debug, info, warn, error
+  logLevel: info
+
+  # Input configuration
+  input:
+    path: /var/log/containers/*.log
+    parser: cri
+    memBufLimit: 16MB
+    skipLongLines: true
+    refreshInterval: 10
+
+  # Namespaces to exclude from logging
+  excludeNamespaces:
+    - logging
+
+  # System namespaces (logs go to system log group)
+  systemNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+    - logging
+    - argocd
+    - cert-manager
+    - ingress-nginx
+    - traefik
+    - metallb-system
+
+  # Custom parsers (in addition to default cri and json parsers)
+  customParsers: ""
+
+  # Additional filters (raw fluent-bit config)
+  extraFilters: ""
+
+  # Additional outputs (raw fluent-bit config)
+  extraOutputs: ""

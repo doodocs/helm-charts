@@ -1,0 +1,13 @@
+apiVersion: v2
+name: fluent-bit
+description: Fluent Bit log collector for Yandex Cloud Logging
+type: application
+version: 1.0.0
+appVersion: "1.8.6"
+home: https://github.com/doodocs/helm-charts/
+keywords:
+  - logging
+  - fluent-bit
+  - yandex-cloud
+maintainers:
+  - name: Doodocs Team
