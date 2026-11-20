@@ -1,0 +1,16 @@
+{{- if .Values.collector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fluent-bit.collectorName" . }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "fluent-bit.collectorSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+{{- end }}

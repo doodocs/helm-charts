@@ -61,21 +61,23 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Create the secret name for YC key
+OTel collector name and OTLP target of the Fluent Bit output
 */}}
-{{- define "fluent-bit.secretName" -}}
-{{- if .Values.yandexCloud.existingSecret }}
-{{- .Values.yandexCloud.existingSecret }}
+{{- define "fluent-bit.collectorName" -}}
+{{- printf "%s-collector" (include "fluent-bit.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "fluent-bit.otlpHost" -}}
+{{- if .Values.otlp.host }}
+{{- .Values.otlp.host }}
+{{- else if .Values.collector.enabled }}
+{{- include "fluent-bit.collectorName" . }}
 {{- else }}
-{{- printf "%s-yc-key" (include "fluent-bit.fullname" .) }}
+{{- fail "otlp.host is required when collector.enabled=false" }}
 {{- end }}
 {{- end }}
 
-{{/*
-Generate system namespaces regex pattern
-*/}}
-{{- define "fluent-bit.systemNamespacesRegex" -}}
-{{- $namespaces := .Values.config.systemNamespaces }}
-{{- printf "^(%s)$" (join "|" $namespaces) }}
+{{- define "fluent-bit.collectorSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fluent-bit.name" . }}-collector
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
-

@@ -14,8 +14,10 @@ data:
         HTTP_Server   On
         HTTP_Listen   0.0.0.0
         HTTP_Port     2020
-        # Filesystem storage for reliability
-        storage.path              /var/log/fluent-bit-storage
+        Health_Check  On
+        # Filesystem buffer: records survive collector/Monium outages and agent restarts.
+        # New paths: the 1.x state DB and chunks (yc-logging tags) are not reused.
+        storage.path              /var/log/fluent-bit-storage-v2
         storage.sync              normal
         storage.checksum          off
         storage.backlog.mem_limit 50M
@@ -24,11 +26,15 @@ data:
         Name              tail
         Tag               kube.*
         Path              {{ .Values.config.input.path }}
-        Parser            {{ .Values.config.input.parser }}
-        DB                /var/log/fluent-bit-state.db
+        # Joins CRI partial lines (P/F); long app lines used to be split into ~16 KB records
+        multiline.parser  docker, cri
+        DB                /var/log/fluent-bit-state-v2.db
         Mem_Buf_Limit     {{ .Values.config.input.memBufLimit }}
+        Buffer_Chunk_Size 64KB
+        Buffer_Max_Size   {{ .Values.config.input.bufferMaxSize }}
         Skip_Long_Lines   {{ if .Values.config.input.skipLongLines }}On{{ else }}Off{{ end }}
         Refresh_Interval  {{ .Values.config.input.refreshInterval }}
+        storage.type      filesystem
 
     [FILTER]
         Name                kubernetes
@@ -41,7 +47,7 @@ data:
         Keep_Log            On
         K8S-Logging.Parser  On
         K8S-Logging.Exclude On
-        Labels              On
+        Labels              Off
         Annotations         Off
         # Cache metadata to reduce API server load
         Kube_Meta_Cache_TTL 60s
@@ -54,58 +60,29 @@ data:
         Exclude  $kubernetes['namespace_name'] ^({{ join "|" .Values.config.excludeNamespaces }})$
     {{- end }}
 
-    # Rewrite tag: system namespaces -> system.*, apps -> apps.*
-    # Rules are evaluated in order; first match wins
-    [FILTER]
-        Name          rewrite_tag
-        Match         kube.*
-        Rule          $kubernetes['namespace_name'] {{ include "fluent-bit.systemNamespacesRegex" . }} system.$TAG false
-        Rule          $kubernetes['namespace_name'] ^.+$ apps.$TAG false
-        Emitter_Name  re_emitted
-
     {{- if .Values.config.extraFilters }}
     {{ .Values.config.extraFilters | nindent 4 }}
     {{- end }}
 
-    # System logs -> yc-logging
+    # Pod logs -> OTel collector -> Monium. The collector sets the Monium labels
+    # (cluster, service = namespace), see collector-configmap.yaml.
     [OUTPUT]
-        Name            yc-logging
-        Match           system.*
-        group_id        {{ .Values.yandexCloud.systemLogGroupId }}
-        resource_type   {{ .Values.yandexCloud.systemResourceType }}
-        resource_id     {{ .Values.yandexCloud.systemResourceId }}
-        authorization   iam-key-file:/etc/yc/key.json
-        endpoint        {{ .Values.yandexCloud.endpoint }}
-        default_level   INFO
-        Retry_Limit     10
-        net.keepalive   On
-
-    # App logs -> yc-logging
-    [OUTPUT]
-        Name            yc-logging
-        Match           apps.*
-        group_id        {{ .Values.yandexCloud.appsLogGroupId }}
-        resource_type   {{ .Values.yandexCloud.appsResourceType }}
-        resource_id     {{ .Values.yandexCloud.appsResourceId }}
-        authorization   iam-key-file:/etc/yc/key.json
-        endpoint        {{ .Values.yandexCloud.endpoint }}
-        level_key       level
-        default_level   INFO
-        Retry_Limit     10
-        net.keepalive   On
+        Name                     opentelemetry
+        Match                    kube.*
+        Host                     {{ include "fluent-bit.otlpHost" . }}
+        Port                     {{ .Values.otlp.port }}
+        Logs_uri                 /v1/logs
+        logs_body_key            $log
+        logs_body_key_attributes true
+        compress                 gzip
+        Retry_Limit              no_limits
+        storage.total_limit_size {{ .Values.config.storageTotalLimitSize }}
 
     {{- if .Values.config.extraOutputs }}
     {{ .Values.config.extraOutputs | nindent 4 }}
     {{- end }}
 
   parsers.conf: |
-    [PARSER]
-        Name        cri
-        Format      regex
-        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
-        Time_Key    time
-        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
-
     [PARSER]
         Name        json
         Format      json
