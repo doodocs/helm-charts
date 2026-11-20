@@ -46,9 +46,6 @@ spec:
               mountPath: /var/log
             - name: config
               mountPath: /fluent-bit/etc
-            - name: yc-key
-              mountPath: /etc/yc
-              readOnly: true
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -72,6 +69,3 @@ spec:
         - name: config
           configMap:
             name: {{ include "fluent-bit.fullname" . }}-config
-        - name: yc-key
-          secret:
-            secretName: {{ include "fluent-bit.secretName" . }}

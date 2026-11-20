@@ -1,13 +1,15 @@
 apiVersion: v2
 name: fluent-bit
-description: Fluent Bit log collector for Yandex Cloud Logging
+description: Fluent Bit log collector that ships pod logs to Yandex Monium over OTLP
 type: application
-version: 1.0.0
-appVersion: "1.8.6"
+version: 2.0.0
+appVersion: "4.2.3"
 home: https://github.com/doodocs/helm-charts/
 keywords:
   - logging
   - fluent-bit
   - yandex-cloud
+  - monium
+  - opentelemetry
 maintainers:
   - name: Doodocs Team

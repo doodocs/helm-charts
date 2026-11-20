@@ -1,0 +1,102 @@
+{{- if .Values.collector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fluent-bit.collectorName" . }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: {{ .Values.collector.memoryLimiter.limitMib }}
+        spike_limit_mib: {{ .Values.collector.memoryLimiter.spikeLimitMib }}
+      # Only pod logs from fluent-bit (they carry the `kubernetes` map); OTLP logs that
+      # apps might send here directly would duplicate stdout
+      filter/fluentbit-only:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'log.attributes["kubernetes"] == nil'
+      # Fluent Bit sends one resource per batch with the Kubernetes metadata in the
+      # `kubernetes` attribute map. Flatten it into k8s.* attributes, derive severity
+      # from the app `level` field and drop fields that only add bytes.
+      transform/logs-flatten:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - set(log.attributes["k8s.namespace.name"], log.attributes["kubernetes"]["namespace_name"])
+              - set(log.attributes["k8s.pod.name"], log.attributes["kubernetes"]["pod_name"])
+              - set(log.attributes["k8s.container.name"], log.attributes["kubernetes"]["container_name"])
+              - set(log.attributes["k8s.node.name"], log.attributes["kubernetes"]["host"])
+              - delete_key(log.attributes, "kubernetes")
+              - delete_key(log.attributes, "_p")
+              # CRI time (and the app's own time field): the record timestamp already has it
+              - delete_key(log.attributes, "time")
+              # 1C sync payloads: kept in the body, too large to duplicate as attributes
+              - delete_key(log.attributes, "elements")
+              - truncate_all(log.attributes, 4096)
+              - set(log.severity_text, ToUpperCase(log.attributes["level"])) where IsString(log.attributes["level"])
+              - set(log.severity_text, "INFO") where log.severity_text == ""
+              - set(log.severity_text, "WARN") where log.severity_text == "WARNING"
+              - set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.severity_text == "DEBUG"
+              - set(log.severity_number, SEVERITY_NUMBER_INFO) where log.severity_text == "INFO"
+              - set(log.severity_number, SEVERITY_NUMBER_WARN) where log.severity_text == "WARN"
+              - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_text == "ERROR"
+              - set(log.severity_number, SEVERITY_NUMBER_FATAL) where log.severity_text == "FATAL" or log.severity_text == "PANIC"
+      # Every pod gets its own resource (Monium keeps k8s.* resource attributes)
+      groupbyattrs/logs:
+        keys: [k8s.namespace.name, k8s.pod.name, k8s.container.name, k8s.node.name]
+      # Monium service label = Kubernetes namespace
+      transform/logs-service:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(resource.attributes["service.name"], resource.attributes["k8s.namespace.name"])
+              # Monium rejects the whole request when service is empty ("service value is invalid")
+              - set(resource.attributes["service.name"], "unknown") where resource.attributes["service.name"] == nil or resource.attributes["service.name"] == ""
+
+    exporters:
+      otlp/monium-logs:
+        endpoint: {{ .Values.monium.endpoint }}
+        compression: zstd
+        headers:
+          authorization: "Api-Key ${env:MONIUM_API_KEY}"
+          x-monium-project: "folder__${env:MONIUM_FOLDER_ID}"
+          x-monium-cluster: "${env:MONIUM_CLUSTER}"
+        retry_on_failure:
+          enabled: true
+          max_elapsed_time: 10m
+        # Batches by bytes: a record can be up to 1 MB, a count-based batch could exceed
+        # the gRPC message limit. Under backpressure fluent-bit keeps records on disk.
+        sending_queue:
+          enabled: true
+          sizer: requests
+          queue_size: 50
+          batch:
+            flush_timeout: 5s
+            sizer: bytes
+            min_size: 1000000
+            max_size: 4000000
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/fluentbit-only, transform/logs-flatten, groupbyattrs/logs, transform/logs-service]
+          exporters: [otlp/monium-logs]
+{{- end }}
